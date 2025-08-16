@@ -1,0 +1,89 @@
+//@version=6
+strategy("London Breakout EMA Pro Edition", overlay=true, max_lines_count=500, max_labels_count=500, margin_long=100, margin_short=100)
+
+// === INPUTS === //
+sensitivity = input.float(1.0, title = 'Signal Sensitivity', minval = 0.1, step = 0.1)
+riskMode = input.string('Normal', title = 'Risk Mode', options = ['Conservative', 'Normal', 'Aggressive'])
+showDashboard = input.bool(true, title = 'Show Dashboard')
+sessionFilter = input.string('All', title = 'Session Filter', options = ['All', 'London', 'New York', 'Asia'])
+showZones = input.bool(true, title = 'Show Order Blocks')
+showSignals = input.bool(true, title = 'Show Buy/Sell Labels')
+
+// === EMA Trend Logic === //
+emaFast = ta.ema(close, 20)
+emaSlow = ta.ema(close, 50)
+trendUp = emaFast > emaSlow
+trendDn = emaFast < emaSlow
+
+plot(emaFast, color=color.blue)
+plot(emaSlow, color=color.red)
+
+// === ATR & Volatility === //
+atr = ta.atr(14)
+volatilityLevel = atr > ta.sma(atr, 14) ? 'High' : 'Low'
+
+// === Session Logic === //
+isLondon   = (hour >= 8  and hour < 16)
+isNewYork  = (hour >= 15 and hour < 23)
+isAsia     = (hour >= 1  and hour < 9)
+sessionOK  = sessionFilter == 'All' or (sessionFilter == 'London' and isLondon) or (sessionFilter == 'New York' and isNewYork) or (sessionFilter == 'Asia' and isAsia)
+
+// === Asian Session High/Low for Breakout === //
+var float asiaHigh = na
+var float asiaLow  = na
+inAsia = isAsia
+if inAsia
+    asiaHigh := na(asiaHigh) ? high : math.max(asiaHigh, high)
+    asiaLow  := na(asiaLow)  ? low  : math.min(asiaLow, low)
+
+// Reset for new day
+if dayofmonth != dayofmonth[1]
+    asiaHigh := na
+    asiaLow  := na
+
+// === London Breakout Levels === //
+breakOffset = input.float(5, "Breakout Offset (points)")
+longEntry  = (isLondon and sessionOK and trendUp and close > asiaHigh + breakOffset * syminfo.mintick)
+shortEntry = (isLondon and sessionOK and trendDn and close < asiaLow - breakOffset * syminfo.mintick)
+
+// === ATR SL/TP === //
+atrSLMult = input.float(1.0, "ATR SL Multiplier")
+atrTPMult = input.float(2.0, "ATR TP Multiplier")
+longSL  = close - atr * atrSLMult
+longTP  = close + atr * atrTPMult
+shortSL = close + atr * atrSLMult
+shortTP = close - atr * atrTPMult
+
+// === Place Trades === //
+if longEntry
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=longSL, limit=longTP)
+
+if shortEntry
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=shortSL, limit=shortTP)
+
+// === Plot Buy/Sell Signals === //
+plotshape(showSignals and longEntry, title="Buy Signal", location=location.belowbar, color=color.green, style=shape.labelup, text="Buy", textcolor=color.white)
+plotshape(showSignals and shortEntry, title="Sell Signal", location=location.abovebar, color=color.red, style=shape.labeldown, text="Sell", textcolor=color.white)
+
+// === Order Block Zones === //
+var float lastHigh = na
+var float lastLow = na
+lastHigh := ta.highest(high, 20)
+lastLow := ta.lowest(low, 20)
+
+if showZones
+    box.new(bar_index - 20, lastHigh, bar_index, lastHigh + 0.001, border_color=color.red, bgcolor=color.new(color.red, 90))
+    box.new(bar_index - 20, lastLow - 0.001, bar_index, lastLow, border_color=color.green, bgcolor=color.new(color.green, 90))
+
+// === Dashboard === //
+var label dashboard = na
+if showDashboard
+    label.delete(dashboard)
+    txt = 'London Breakout EMA Dashboard\n' +
+          'Risk: ' + riskMode + '\n' +
+          'Trend: ' + (trendUp ? 'Uptrend' : trendDn ? 'Downtrend' : 'Neutral') + '\n' +
+          'Volatility: ' + volatilityLevel + '\n' +
+          'Session: ' + (isLondon ? 'London' : isNewYork ? 'New York' : isAsia ? 'Asia' : 'Unknown')
+    dashboard := label.new(bar_index, high, text=txt, style=label.style_label_left, textcolor=color.white, size=size.small)
